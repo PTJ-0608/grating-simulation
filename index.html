@@ -405,20 +405,16 @@ function getCtx(canvas, panel) {
 }
 
 // ============================================================
-// ★ Canvas ①: 动态波形场
+// ★ Canvas ①: 动态波形场 — 完整光路
 //
-// 算法改进:
-//   - 直接计算每个像素的复振幅包络 (不随时间变化的部分)
-//   - 时间项 sin(ωt) 作为统一的相位因子施加
-//   - 相长区域始终亮，相消区域始终暗
-//   - 对比度用 power curve 增强
-//   - 计算网格缩小至 200x130 = 26K 像素，大幅提升性能
+//   左侧: 入射平面波 (平行等相位面，按 θᵢ 倾斜)
+//   光栅处: 只有缝的位置透光
+//   右侧: 每个缝发出圆形子波，叠加形成干涉
 // ============================================================
 function drawWaveField(canvas, panel, dt) {
   const r = getCtx(canvas, panel);
   if (!r) return;
 
-  // 推进仿真时间
   const spd = S.speed / 10;
   S.simTime += dt * spd * 1.5;
 
@@ -428,19 +424,21 @@ function drawWaveField(canvas, panel, dt) {
   const {lam, N, d, thetaI} = S;
   const lc = wl2rgb(lam);
   const th_i = thetaI * Math.PI / 180;
+  const sin_i = Math.sin(th_i);
+  const cos_i = Math.cos(th_i);
 
-  // ── 缩放 ──
-  const pad = 16;
+  // ── 布局: 光栅在 38% 处 ──
+  const pad = 14;
   const fieldW = w - pad*2;
   const fieldH = h - pad*2;
-  const cx = pad + 14;
-  const cy = pad + fieldH / 2;
+  const cx = pad + fieldW * 0.38;   // 光栅 — 左边留出入射波空间
+  const cy = pad + fieldH / 2;     // 光轴
 
   const slitN = Math.min(N, 50);
-  const maxGratingH = fieldH * 0.78;
+  const maxGratingH = fieldH * 0.74;
   const dPx_ideal = maxGratingH / Math.max(1, slitN - 1);
   let lamPx = lam * (dPx_ideal / d);
-  lamPx = Math.max(14, Math.min(40, lamPx));
+  lamPx = Math.max(14, Math.min(36, lamPx));
   const scale = lamPx / lam;
   const dPx = d * scale;
   const k = 2 * Math.PI / lamPx;
@@ -449,74 +447,80 @@ function drawWaveField(canvas, panel, dt) {
   const slitSp = dPx;
   const gratingTop = cy - gratingH / 2;
 
-  // ── 计算场 ──
-  // 用小网格 + 双线性插值上采样，性能和画质兼顾
-  const GW = 200, GH = 130;
+  // ── 逐像素计算 ──
+  const GW = 240, GH = 150;
   const ssX = fieldW / GW;
   const ssY = fieldH / GH;
   const imgData = ctx.createImageData(GW, GH);
 
-  const bgR = 6, bgG = 6, bgB = 20;
-  const omega = 2 * Math.PI * 1.5;
+  const bgR = 5, bgG = 5, bgB = 18;
+  const omega = 2 * Math.PI * 1.6;
   const phase = omega * S.simTime;
 
-  // 预计算每个源的数据
+  // 预计算缝源 Y 坐标
   const srcY = [];
   for (let si = 0; si < slitN; si++) {
     srcY.push(gratingTop + si * slitSp);
   }
+
 
   for (let gx = 0; gx < GW; gx++) {
     const wx = pad + gx * ssX;
     for (let gy = 0; gy < GH; gy++) {
       const wy = pad + gy * ssY;
 
-      let sumSin = 0, sumCos = 0;
+      let field = 0;
+      const leftOfGrating = wx < cx - 1;
 
-      for (let si = 0; si < slitN; si++) {
-        const dx = wx - cx;
-        const dy = wy - srcY[si];
-        const dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
-        const decay = 1.0 / Math.sqrt(1.0 + dist * 0.06);
-        // 入射角相位偏移: k * y_slit * sin(θᵢ)
-        const y_slit = srcY[si] - cy;
-        const phi = k * (dist - y_slit * Math.sin(th_i));
-        sumSin += Math.sin(phi) * decay;
-        sumCos += Math.cos(phi) * decay;
+      if (leftOfGrating) {
+        // ── 左侧: 入射平面波 ──
+        // 波从左侧入射, 等相位面垂直于 beamDir
+        // 相位 = k * (x*cosθᵢ + y*sinθᵢ)
+        const phi = k * (wx * cos_i + (wy - cy) * sin_i);
+        field = Math.sin(phi - phase);
+        // 平面波振幅恒定
+      } else {
+        // ── 右侧: 圆形子波叠加 ──
+        let sumSin = 0, sumCos = 0;
+
+        for (let si = 0; si < slitN; si++) {
+          const dx = wx - cx;
+          const dy = wy - srcY[si];
+          const dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
+          const decay = 1.0 / Math.sqrt(1.0 + dist * 0.05);
+          // 入射波到达该缝时的相位
+          const y_slit = srcY[si] - cy;
+          const incidentPhi = k * y_slit * sin_i;
+          // 子波相位 = 入射相位 + k*dist
+          const phi = k * dist + incidentPhi;
+          sumSin += Math.sin(phi) * decay;
+          sumCos += Math.cos(phi) * decay;
+        }
+
+        const envelope = Math.sqrt(sumSin * sumSin + sumCos * sumCos);
+        const norm = envelope / Math.max(0.3, slitN * 0.50);
+        let osc = 0;
+        if (envelope > 0.001) {
+          osc = (sumSin * Math.cos(phase) - sumCos * Math.sin(phase)) / envelope;
+        }
+        field = norm * (0.65 + 0.35 * osc);
+        // power curve
+        if (field > 0) field = Math.pow(field, 0.7);
+        else field = -Math.pow(Math.abs(field), 0.7);
       }
-
-      // 复振幅包络 = sqrt(sumSin² + sumCos²)
-      const envelope = Math.sqrt(sumSin * sumSin + sumCos * sumCos);
-      // 归一化
-      const norm = envelope / Math.max(0.3, slitN * 0.55);
-      // 真实瞬时场: ΣA·sin(kr - ωt) = sumSin·cos(ωt) - sumCos·sin(ωt)
-      let osc = 0;
-      if (envelope > 0.001) {
-        osc = (sumSin * Math.cos(phase) - sumCos * Math.sin(phase)) / envelope;
-      }
-      // 混合: 70% 包络 + 30% 振荡
-      const mixed = norm * (0.7 + 0.3 * osc);
-
-      // Power curve 增强对比度
-      const contrast = mixed < 0
-        ? -Math.pow(Math.abs(mixed), 0.65)
-        : Math.pow(mixed, 0.65);
 
       const idx = (gy * GW + gx) * 4;
-      if (contrast > 0.02) {
-        // 相长区域: 光色
-        const blend = Math.min(1, contrast * 1.4);
+      if (field > 0.015) {
+        const blend = Math.min(1, field * 1.3);
         imgData.data[idx]   = Math.round(bgR + (lc.r - bgR) * blend);
         imgData.data[idx+1] = Math.round(bgG + (lc.g - bgG) * blend);
         imgData.data[idx+2] = Math.round(bgB + (lc.b - bgB) * blend);
-      } else if (contrast < -0.02) {
-        // 相消区域: 更暗
-        const dim = Math.max(0.25, 1 - Math.abs(contrast) * 1.2);
+      } else if (field < -0.015) {
+        const dim = Math.max(0.22, 1 - Math.abs(field) * 1.1);
         imgData.data[idx]   = Math.round(bgR * dim);
         imgData.data[idx+1] = Math.round(bgG * dim);
         imgData.data[idx+2] = Math.round(bgB * dim);
       } else {
-        // 中性区域: 背景色
         imgData.data[idx]   = bgR;
         imgData.data[idx+1] = bgG;
         imgData.data[idx+2] = bgB;
@@ -533,16 +537,56 @@ function drawWaveField(canvas, panel, dt) {
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(offCanvas, pad, pad, fieldW, fieldH);
 
-  // ── 波前弧线 ──
+  // ── 左侧: 入射波前弧线 (垂直或倾斜的等相位面) ──
+  const leftSpace = cx - pad - 6;
+  // 入射波矢量方向上的线
+  const waveNormalX = cos_i;
+  const waveNormalY = sin_i;
+  // 波前方向垂直于传播方向
+  const frontDirX = -sin_i;
+  const frontDirY = cos_i;
+
+  for (let phiOffset = 0; phiOffset < 6; phiOffset++) {
+    // 等相位面: k*(x*cosθᵢ + y*sinθᵢ) = 某个常数
+    // 在画布上画一小段来表示
+    const phaseVal = phiOffset * 2 * Math.PI / k;  // 每个波长画一条
+    // 线段中心: 取沿波法线方向的点
+    const baseX = cx - leftSpace * 0.3 - phiOffset * lamPx * cos_i;
+    const baseY = cy - phiOffset * lamPx * sin_i;
+    if (baseX < pad + 4 || baseX > cx - 4) continue;
+
+    const segLen = gratingH * 0.55;
+    const hSeg = segLen / 2;
+    ctx.strokeStyle = lc.rgba(0.10);
+    ctx.lineWidth = 0.7;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(baseX - frontDirX * hSeg, baseY - frontDirY * hSeg);
+    ctx.lineTo(baseX + frontDirX * hSeg, baseY + frontDirY * hSeg);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 入射方向箭头
+  const arrowX = cx - leftSpace * 0.45;
+  const arrowY = cy - sin_i * leftSpace * 0.30;
+  ctx.fillStyle = lc.rgba(0.35);
+  ctx.font = '9px "Microsoft YaHei"';
+  ctx.textAlign = 'center';
+  if (Math.abs(thetaI) > 1) {
+    ctx.fillText(`入射角 θᵢ=${thetaI}°`, arrowX, cy - gratingH * 0.42);
+  }
+
+  // ── 右侧: 圆形波前弧线 ──
   const arcSlits = [0];
   if (slitN > 2) arcSlits.push(Math.floor(slitN / 2));
   if (slitN > 3) arcSlits.push(slitN - 1);
 
-  const maxR = fieldW - 10;
+  const maxR = pad + fieldW - cx - 8;
   for (const si of arcSlits) {
     const sy = gratingTop + si * slitSp;
     for (let r = lamPx; r < maxR; r += lamPx) {
-      ctx.strokeStyle = lc.rgba(0.10);
+      ctx.strokeStyle = lc.rgba(0.09);
       ctx.lineWidth = 0.5;
       ctx.beginPath();
       ctx.arc(cx, sy, r, -Math.PI / 2, Math.PI / 2);
@@ -554,15 +598,15 @@ function drawWaveField(canvas, panel, dt) {
   const phys = compute();
   for (const o of phys.orders) {
     if (Math.abs(o.m) > 3) continue;
-    const dirLen = maxR * 0.82;
+    const dirLen = maxR * 0.78;
     const dx = dirLen * Math.cos(o.thetaRad);
     const dy = dirLen * Math.sin(o.thetaRad);
     for (const si of arcSlits) {
       const sy = gratingTop + si * slitSp;
       ctx.strokeStyle = o.m === 0
-        ? 'rgba(255,255,255,0.50)'
-        : lc.rgba(0.38);
-      ctx.lineWidth = o.m === 0 ? 1.5 : 0.8;
+        ? 'rgba(255,255,255,0.45)'
+        : lc.rgba(0.35);
+      ctx.lineWidth = o.m === 0 ? 1.4 : 0.8;
       ctx.setLineDash(o.m === 0 ? [] : [5, 6]);
       ctx.beginPath();
       ctx.moveTo(cx, sy);
@@ -571,9 +615,9 @@ function drawWaveField(canvas, panel, dt) {
       ctx.setLineDash([]);
     }
     if (o.m !== 0) {
-      const lx = cx + dirLen * 1.05 * Math.cos(o.thetaRad);
-      const ly = cy + dirLen * 1.05 * Math.sin(o.thetaRad);
-      ctx.fillStyle = lc.rgba(0.60);
+      const lx = cx + dirLen * 1.06 * Math.cos(o.thetaRad);
+      const ly = cy + dirLen * 1.06 * Math.sin(o.thetaRad);
+      ctx.fillStyle = lc.rgba(0.55);
       ctx.font = 'bold 10px "Consolas"';
       ctx.textAlign = 'center';
       ctx.fillText(`m=${o.m}`, lx, ly);
@@ -582,18 +626,23 @@ function drawWaveField(canvas, panel, dt) {
 
   // ── 光栅板 ──
   const gBarW = 8;
-  ctx.fillStyle = 'rgba(15,15,45,0.65)';
-  ctx.fillRect(cx - gBarW/2, gratingTop - 4, gBarW, gratingH + 8);
-  ctx.strokeStyle = 'rgba(120,120,180,0.5)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(cx - gBarW/2, gratingTop - 4, gBarW, gratingH + 8);
+  ctx.fillStyle = 'rgba(12,12,40,0.7)';
+  ctx.fillRect(cx - gBarW/2, gratingTop - 5, gBarW, gratingH + 10);
+  ctx.strokeStyle = 'rgba(140,140,200,0.55)';
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(cx - gBarW/2, gratingTop - 5, gBarW, gratingH + 10);
 
-  // 缝发光点
+  // 缝孔 (发光点)
   for (let i = 0; i < slitN; i++) {
     const sy = gratingTop + i * slitSp;
-    ctx.fillStyle = lc.rgba(0.75);
+    const gapW = Math.min(slitSp * 0.38, 4);
+    // 缝的开口 — 光穿透的位置
+    ctx.fillStyle = lc.rgba(0.55);
+    ctx.fillRect(cx - gBarW/2 - 1, sy - gapW/2, gBarW + 2, gapW);
+    // 发光中心
+    ctx.fillStyle = lc.rgba(0.8);
     ctx.beginPath();
-    ctx.arc(cx, sy, Math.min(2.5, slitSp * 0.3), 0, Math.PI * 2);
+    ctx.arc(cx, sy, Math.min(2.2, gapW * 0.55), 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -601,38 +650,42 @@ function drawWaveField(canvas, panel, dt) {
   ctx.fillStyle = '#8080a0';
   ctx.font = 'bold 10px "Microsoft YaHei"';
   ctx.textAlign = 'left';
-  ctx.fillText('惠更斯子波叠加 · 实时波形场', pad + 6, pad - 2);
+  ctx.fillText('完整光路: 入射平面波 → 光栅 → 惠更斯子波叠加', pad + 4, pad - 2);
   ctx.font = '9px "Microsoft YaHei"';
   ctx.textAlign = 'center';
   ctx.fillText(
-    `N=${N}  d=${(d/1000).toFixed(2)}μm  λ=${lam}nm  (1λ≈${Math.round(lamPx)}px)`,
+    `N=${N}  d=${(d/1000).toFixed(2)}μm  λ=${lam}nm`,
     w / 2, pad - 2
   );
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
   ctx.lineWidth = 1;
   ctx.strokeRect(pad, pad, fieldW, fieldH);
-  // ── 色阶图例 (右侧) ──
-  const cbarX = pad + fieldW + 14, cbarY = pad + 20, cbarW = 10, cbarH = Math.min(160, fieldH * 0.5);
+
+  // ── 区域标签 ──
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.font = '8px "Microsoft YaHei"';
+  ctx.textAlign = 'center';
+  ctx.fillText('入射波', pad + leftSpace * 0.45, cy - gratingH * 0.44);
+  ctx.fillText('衍射波', cx + maxR * 0.45, cy - gratingH * 0.44);
+
+  // ── 色阶图例 ──
+  const cbarX = pad + fieldW + 12, cbarY = pad + 18;
+  const cbarW = 9, cbarH = Math.min(140, fieldH * 0.45);
   const cbarGrad = ctx.createLinearGradient(0, cbarY, 0, cbarY + cbarH);
   cbarGrad.addColorStop(0, lc.str);
   cbarGrad.addColorStop(0.5, `rgb(${bgR},${bgG},${bgB})`);
   cbarGrad.addColorStop(1, '#020208');
   ctx.fillStyle = cbarGrad;
   ctx.fillRect(cbarX, cbarY, cbarW, cbarH);
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 0.5;
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 0.5;
   ctx.strokeRect(cbarX, cbarY, cbarW, cbarH);
-  ctx.fillStyle = '#8080a0'; ctx.font = '8px "Microsoft YaHei"'; ctx.textAlign = 'left';
-  ctx.fillText('亮', cbarX + cbarW + 4, cbarY + 8);
-  ctx.fillText('暗', cbarX + cbarW + 4, cbarY + cbarH - 2);
-
-  ctx.fillStyle = '#607080';
-  ctx.font = '8px "Microsoft YaHei"';
-  ctx.textAlign = 'right';
-  ctx.fillText(
-    '亮纹(相长干涉)  |  暗纹(相消干涉)',
-    pad + fieldW - 8, pad + fieldH - 6
-  );
+  ctx.fillStyle = '#8080a0';
+  ctx.font = '7px "Microsoft YaHei"';
+  ctx.textAlign = 'left';
+  ctx.fillText('亮', cbarX + cbarW + 3, cbarY + 7);
+  ctx.fillText('暗', cbarX + cbarW + 3, cbarY + cbarH - 2);
 }
 
 // ============================================================
