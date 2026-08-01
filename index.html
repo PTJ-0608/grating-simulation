@@ -537,20 +537,12 @@ function drawWaveField(canvas, panel, dt) {
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(offCanvas, pad, pad, fieldW, fieldH);
 
-  // ── 左侧: 入射波前弧线 (垂直或倾斜的等相位面) ──
+  // ── 左侧: 入射波前 (等相位面线段) ──
   const leftSpace = cx - pad - 6;
-  // 入射波矢量方向上的线
-  const waveNormalX = cos_i;
-  const waveNormalY = sin_i;
-  // 波前方向垂直于传播方向
   const frontDirX = -sin_i;
   const frontDirY = cos_i;
 
   for (let phiOffset = 0; phiOffset < 6; phiOffset++) {
-    // 等相位面: k*(x*cosθᵢ + y*sinθᵢ) = 某个常数
-    // 在画布上画一小段来表示
-    const phaseVal = phiOffset * 2 * Math.PI / k;  // 每个波长画一条
-    // 线段中心: 取沿波法线方向的点
     const baseX = cx - leftSpace * 0.3 - phiOffset * lamPx * cos_i;
     const baseY = cy - phiOffset * lamPx * sin_i;
     if (baseX < pad + 4 || baseX > cx - 4) continue;
@@ -567,14 +559,13 @@ function drawWaveField(canvas, panel, dt) {
     ctx.setLineDash([]);
   }
 
-  // 入射方向箭头
-  const arrowX = cx - leftSpace * 0.45;
-  const arrowY = cy - sin_i * leftSpace * 0.30;
-  ctx.fillStyle = lc.rgba(0.35);
-  ctx.font = '9px "Microsoft YaHei"';
-  ctx.textAlign = 'center';
+  // 入射角标注
   if (Math.abs(thetaI) > 1) {
-    ctx.fillText(`入射角 θᵢ=${thetaI}°`, arrowX, cy - gratingH * 0.42);
+    const labelX = cx - leftSpace * 0.45;
+    ctx.fillStyle = lc.rgba(0.35);
+    ctx.font = '9px "Microsoft YaHei"';
+    ctx.textAlign = 'center';
+    ctx.fillText(`入射角 θᵢ=${thetaI}°`, labelX, cy - gratingH * 0.42);
   }
 
   // ── 右侧: 圆形波前弧线 ──
@@ -1052,15 +1043,14 @@ function frame(ts) {
   if (dt>0.15) dt=0.033;
   lastTime=ts;
 
-  // 波形场始终动画 (即使参数没变)
-  drawWaveField(cWave, pWave, dt);
+  try {
+    drawWaveField(cWave, pWave, dt);
+  } catch(e) { console.error('drawWaveField:',e); }
 
-  // 光学图和强度图只在变化时重绘
   if (fieldDirty) {
-    // 清除物理缓存
     PHY_CACHE.key = null;
-    drawOptical(cOptic, pOptic);
-    drawChart(cChart, pChart);
+    try { drawOptical(cOptic, pOptic); } catch(e) { console.error('drawOptical:',e); }
+    try { drawChart(cChart, pChart); } catch(e) { console.error('drawChart:',e); }
     fieldDirty=false;
   }
 
