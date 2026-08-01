@@ -297,143 +297,214 @@ function getCtx(canvas, panel) {
 }
 
 // ============================================================
-// ★ Canvas ①: 动态波形场 — 实时波动传播
+// ★ Canvas ①: 动态波形场 — 惠更斯原理实时波动传播
+//
+// 物理模型:
+//   每个狭缝作为一个点波源发出圆形子波 (惠更斯原理)。
+//   子波叠加后自然呈现干涉图样:
+//     - 亮纹方向 = 光栅方程 d·sinθ = mλ
+//     - 暗纹方向 = 波程差为半波长奇数倍
+//
+// 缩放方案:
+//   将 λ 映射为约 20-30px (可视的波前间距)，
+//   光栅常数 d、缝宽 a 等比例缩放。
 // ============================================================
 function drawWaveField(canvas, panel, dt) {
   const r = getCtx(canvas, panel);
   if (!r) return;
 
   // 推进仿真时间
-  const speed = S.speed / 10; // 0.2 ~ 3.0
-  S.simTime += dt * speed * 1.8;
+  const spd = S.speed / 10;
+  S.simTime += dt * spd * 2.0;
 
   const {ctx, w, h} = r;
   ctx.clearRect(0,0,w,h);
 
-  const {lam, N, d, a} = S;
+  const {lam, N, d} = S;
   const lc = wl2rgb(lam);
-  const k = 2*Math.PI / lam; // 波数 (使用统一单位)
-  const omega = 2*Math.PI * 1.0; // 角频率 (归一化)
 
-  // 坐标: 光栅在左上方，波向右/上下传播
-  // 使用归一化坐标系统
-  const pad = 20;
-  const fieldW = w - pad*2, fieldH = h - pad*2;
-  const cx = pad + fieldW * 0.08;  // 光栅 x (很靠左, 最大化波形区域)
-  const cy = pad + fieldH / 2;     // 光轴
+  // ── 物理 → 像素缩放 (自适应画布) ──
+  // 核心约束: 光栅必须完整显示且波前清晰可见(λ ≈ 15-35px)
+  const pad = 16;
+  const fieldW = w - pad*2;
+  const fieldH = h - pad*2;
+  const cx = pad + 14;                    // 光栅 x
+  const cy = pad + fieldH / 2;           // 光轴 y
 
-  // 光栅缝隙位置 (竖直排列)
-  const slitCount = Math.min(N, 40);
-  const slitTotalH = fieldH * 0.78;
-  const slitSp = slitTotalH / Math.max(1, slitCount-1);
+  const slitN = Math.min(N, 50);
+  // 光栅最多占 fieldH 的 78%
+  const maxGratingH = fieldH * 0.78;
+  // 按 d 缩放: dPx = maxGratingH / (N-1)
+  const dPx_ideal = maxGratingH / Math.max(1, slitN - 1);
+  let lamPx = lam * (dPx_ideal / d);
+  // 限制 λ 像素尺寸在合理范围
+  lamPx = Math.max(14, Math.min(36, lamPx));
+  const scale = lamPx / lam;             // 统一缩放比
+  const dPx = d * scale;                 // 光栅常数 px
+  const k = 2 * Math.PI / lamPx;         // 波数 (rad/px)
+  const omega = 2 * Math.PI * 1.3;      // 角频率
 
-  // 创建离屏画布做逐像素波形计算
-  const imgW = Math.min(600, Math.round(w));
-  const imgH = Math.min(500, Math.round(h));
+  // ── 缝源位置 ──
+  const gratingH = (slitN - 1) * dPx;
+  const slitSp = dPx;
+  const gratingTop = cy - gratingH / 2;
 
-  // 直接用 Canvas 像素操作做波形渲染
-  // 策略: 分块绘制 — 先画暗色背景, 再叠加光波
+  // ── 逐像素计算干涉场 ──
+  // 固定计算网格尺寸以确保性能稳定
+  const GRID_W = 340, GRID_H = 220;
+  const sampleStepX = fieldW / GRID_W;
+  const sampleStepY = fieldH / GRID_H;
+  const imgData = ctx.createImageData(GRID_W, GRID_H);
 
-  // 背景
-  ctx.fillStyle = '#060614';
-  ctx.fillRect(pad, pad, fieldW, fieldH);
+  const bgR = 5, bgG = 5, bgB = 18;
+  const normFactor = 1.0 / Math.max(1, Math.sqrt(slitN) * 0.85);
 
-  // 绘制每个狭缝发出的圆形波 (叠加)
-  // 使用径向渐变模拟波前比较高效
-  // 实际做法: 计算每个像素位置的叠加场 (降采样提高性能)
+  for (let gx = 0; gx < GRID_W; gx++) {
+    const wx = pad + gx * sampleStepX;
+    for (let gy = 0; gy < GRID_H; gy++) {
+      const wy = pad + gy * sampleStepY;
 
-  const step = Math.max(1, Math.floor(fieldW / 280));
-  const maxR = fieldW * 0.95; // 波传播最大半径
-
-  // 为每个狭缝计算源位置
-  const sources = [];
-  for (let i=0; i<slitCount; i++) {
-    sources.push({
-      x: cx,
-      y: cy + (i - (slitCount-1)/2) * slitSp,
-      a: 1.0, // 振幅 (所有缝相同)
-    });
-  }
-
-  // 逐像素叠加 (降采样)
-  const imageData = ctx.createImageData(Math.ceil(fieldW/step)+1, Math.ceil(fieldH/step)+1);
-  const idW = imageData.width;
-  const bgR=6, bgG=6, bgB=20;
-
-  for (let px = 0; px < idW; px++) {
-    const wx = pad + px * step;
-    for (let py = 0; py < imageData.height; py++) {
-      const wy = pad + py * step;
-      // 计算叠加场
-      let total = 0;
-      for (const src of sources) {
-        const dx = wx - src.x;
-        const dy = wy - src.y;
-        const r = Math.sqrt(dx*dx + dy*dy);
-        if (r < 0.5) { total += Math.sin(omega * S.simTime); continue; }
-        // 1/√r 衰减
-        const decay = 1 / Math.sqrt(1 + r/(lam*0.3));
-        total += Math.sin(k*r - omega*S.simTime) * decay;
+      let field = 0;
+      for (let si = 0; si < slitN; si++) {
+        const dx = wx - cx;
+        const dy = wy - (gratingTop + si * slitSp);
+        const r = Math.sqrt(dx * dx + dy * dy) + 0.01;
+        // 衰减: A(r) = 1/√(1 + r·c), 远场渐弱
+        const decay = 1.0 / Math.sqrt(1.0 + r * 0.08);
+        field += Math.sin(k * r - omega * S.simTime) * decay;
       }
-      // 映射到色阶
-      const amp = total / Math.max(1, Math.sqrt(slitCount)*0.7);
-      const alpha = Math.min(1, Math.abs(amp));
-      const bright = amp > 0; // 正=波峰(亮), 负=波谷(暗)
-      let rr,gg,bb;
-      if (bright) {
-        const a = alpha;
-        rr = Math.round(bgR + (lc.r - bgR) * a);
-        gg = Math.round(bgG + (lc.g - bgG) * a);
-        bb = Math.round(bgB + (lc.b - bgB) * a);
+
+      field *= normFactor;
+
+      // 映射到颜色: 正=波峰(亮光色), 负=波谷(暗)
+      const intensity = Math.abs(field);
+      const peak = field > 0;
+      const blend = Math.min(1, intensity);
+
+      let rr, gg, bb;
+      if (peak) {
+        rr = Math.round(bgR + (lc.r - bgR) * blend);
+        gg = Math.round(bgG + (lc.g - bgG) * blend);
+        bb = Math.round(bgB + (lc.b - bgB) * blend);
       } else {
-        rr = Math.round(bgR * (1-alpha*0.6));
-        gg = Math.round(bgG * (1-alpha*0.6));
-        bb = Math.round(bgB * (1-alpha*0.6));
+        // 波谷 — 比背景更暗
+        const dim = 1 - blend * 0.55;
+        rr = Math.round(bgR * dim);
+        gg = Math.round(bgG * dim);
+        bb = Math.round(bgB * dim);
       }
-      const idx = (py * idW + px) * 4;
-      imageData.data[idx]   = rr;
-      imageData.data[idx+1] = gg;
-      imageData.data[idx+2] = bb;
-      imageData.data[idx+3] = 255;
+
+      const idx = (gy * gridW + gx) * 4;
+      imgData.data[idx]     = rr;
+      imgData.data[idx + 1] = gg;
+      imgData.data[idx + 2] = bb;
+      imgData.data[idx + 3] = 255;
     }
   }
 
-  // 把降采样的图像放大绘制
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = imageData.width;
-  tempCanvas.height = imageData.height;
-  tempCanvas.getContext('2d').putImageData(imageData, 0, 0);
+  // 渲染: 离屏 → 主画布 (平滑放大)
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width  = gridW;
+  offCanvas.height = gridH;
+  offCanvas.getContext('2d').putImageData(imgData, 0, 0);
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(tempCanvas, pad, pad, fieldW, fieldH);
+  ctx.drawImage(offCanvas, pad, pad, fieldW, fieldH);
 
-  // ── 光栅标记 ──
-  const gH = slitTotalH + 8;
-  ctx.fillStyle = 'rgba(30,30,60,0.5)';
-  ctx.fillRect(cx-5, cy-gH/2, 10, gH);
-  ctx.strokeStyle = 'rgba(150,150,200,0.5)'; ctx.lineWidth=1;
-  ctx.strokeRect(cx-5, cy-gH/2, 10, gH);
+  // ── 叠加波前线 (弧线标注) ──
+  // 从几个代表性缝画出波前弧，增强"波动感"
+  const arcSlits = [0]; // 顶部缝
+  if (slitN > 1) arcSlits.push(Math.floor(slitN / 2)); // 中间缝
+  if (slitN > 2) arcSlits.push(slitN - 1); // 底部缝
 
-  // 缝的发光点
-  for (let i=0; i<slitCount; i++) {
-    const sy = cy + (i-(slitCount-1)/2)*slitSp;
-    ctx.fillStyle = lc.rgba(0.7);
-    ctx.beginPath(); ctx.arc(cx, sy, 2, 0, Math.PI*2); ctx.fill();
+  const maxR = fieldW - 10;
+  // 每隔一个波长画一条弧线
+  const arcStep = lamPx;
+  for (const si of arcSlits) {
+    const sy = gratingTop + si * slitSp;
+    for (let r = arcStep; r < maxR; r += arcStep) {
+      ctx.strokeStyle = lc.rgba(0.13);
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.arc(cx, sy, r, -Math.PI / 2, Math.PI / 2);
+      ctx.stroke();
+    }
   }
 
-  // 标签
-  ctx.fillStyle = '#8080a0'; ctx.font = 'bold 10px "Microsoft YaHei"'; ctx.textAlign = 'center';
-  ctx.fillText(`N=${N}  d=${(d/1000).toFixed(2)}μm  λ=${lam}nm`, cx + fieldW*0.35, pad+14);
-  ctx.fillText('光栅', cx, cy - gH/2 - 8);
-  ctx.fillText('← 波动传播方向 →', cx + fieldW*0.5, cy + gH/2 + 16);
+  // ── 衍射方向线 (标注各级主极大方向) ──
+  const phys = compute();
+  for (const o of phys.orders) {
+    if (Math.abs(o.m) > 3) continue; // 只画前几级
+    const dirLen = maxR * 0.85;
+    const dx = dirLen * Math.cos(o.thetaRad);
+    const dy = dirLen * Math.sin(o.thetaRad);
+    // 从每个代表性缝发出
+    for (const si of arcSlits) {
+      const sy = gratingTop + si * slitSp;
+      ctx.strokeStyle = o.m === 0
+        ? 'rgba(255,255,255,0.50)'
+        : lc.rgba(0.40);
+      ctx.lineWidth = o.m === 0 ? 1.5 : 0.9;
+      ctx.setLineDash(o.m === 0 ? [] : [5, 6]);
+      ctx.beginPath();
+      ctx.moveTo(cx, sy);
+      ctx.lineTo(cx + dx, sy + dy);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // 方向标签
+    if (o.m !== 0) {
+      const lx = cx + dirLen * 1.02 * Math.cos(o.thetaRad);
+      const ly = gratingTop + (slitN-1)/2 * slitSp + dirLen * 1.02 * Math.sin(o.thetaRad);
+      ctx.fillStyle = lc.rgba(0.65);
+      ctx.font = 'bold 10px "Consolas"';
+      ctx.textAlign = 'center';
+      ctx.fillText(`m=${o.m}`, lx, ly);
+    }
+  }
 
-  // 边界框
-  ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth=1;
+  // ── 光栅板 ──
+  const gBarW = 8;
+  ctx.fillStyle = 'rgba(15,15,45,0.65)';
+  ctx.fillRect(cx - gBarW/2, gratingTop - 4, gBarW, gratingH + 8);
+  ctx.strokeStyle = 'rgba(120,120,180,0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - gBarW/2, gratingTop - 4, gBarW, gratingH + 8);
+
+  // 缝孔 (发光点)
+  for (let i = 0; i < slitN; i++) {
+    const sy = gratingTop + i * slitSp;
+    ctx.fillStyle = lc.rgba(0.75);
+    ctx.beginPath();
+    ctx.arc(cx, sy, Math.min(2.5, slitSp * 0.3), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ── 标注 ──
+  ctx.fillStyle = '#8080a0';
+  ctx.font = 'bold 11px "Microsoft YaHei"';
+  ctx.textAlign = 'left';
+  ctx.fillText('惠更斯子波叠加 · 实时波形场', pad + 8, pad + 16);
+  ctx.font = '10px "Microsoft YaHei"';
+  ctx.textAlign = 'center';
+  ctx.fillText(
+    `N=${N}   d=${(d/1000).toFixed(2)}μm   λ=${lam}nm   ` +
+    `(1λ ≈ ${lamPx}px)`,
+    w / 2, pad + 16
+  );
+
+  // 边界
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
   ctx.strokeRect(pad, pad, fieldW, fieldH);
 
-  // 图例
-  ctx.fillStyle = '#9090b0'; ctx.font = '9px "Microsoft YaHei"';
+  // 底部图例
+  ctx.fillStyle = '#707090';
+  ctx.font = '9px "Microsoft YaHei"';
   ctx.textAlign = 'right';
-  ctx.fillText('亮区 = 相长干涉  暗区 = 相消干涉', pad+fieldW-8, pad+fieldH-6);
+  ctx.fillText(
+    '明纹(相长干涉): 亮色光斑  |  暗纹(相消干涉): 暗区',
+    pad + fieldW - 10, pad + fieldH - 8
+  );
 }
 
 // ============================================================
