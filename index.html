@@ -866,17 +866,17 @@ function drawChart(canvas, panel) {
   }
   // ── 虚拟标尺刻度 ──
   const rulerY = stripCY + stripH/2 + 26;
-  const tickStep = maxAbsX < 3 ? 0.5 : (maxAbsX < 10 ? 1 : (maxAbsX < 30 ? 2 : 5));
-  for (let xv = -maxAbsX; xv <= maxAbsX; xv += tickStep) {
+  const rulerTick = maxAbsX < 3 ? 0.5 : (maxAbsX < 10 ? 1 : (maxAbsX < 30 ? 2 : 5));
+  for (let xv = -maxAbsX; xv <= maxAbsX; xv += rulerTick) {
     if (Math.abs(xv) < 0.001) continue;
     const tpx = midX + xv * scale;
     if (tpx > sml + 2 && tpx < sml + ssw - 2) {
       const tickH = (Math.abs(Math.round(xv*2) - xv*2) < 0.01 && Math.abs(xv % 1) < 0.01) ? 7 : 4;
       ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 0.5;
       ctx.beginPath(); ctx.moveTo(tpx, rulerY - tickH); ctx.lineTo(tpx, rulerY + tickH); ctx.stroke();
-      if (Math.abs(xv % Math.max(1, tickStep*2)) < 0.01 || Math.abs(tickStep - 1) < 0.01) {
+      if (Math.abs(xv % Math.max(1, rulerTick*2)) < 0.01 || Math.abs(rulerTick - 1) < 0.01) {
         ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = '7px "Consolas"'; ctx.textAlign = 'center';
-        ctx.fillText(xv.toFixed(tickStep<1?1:0)+'cm', tpx, rulerY + 12);
+        ctx.fillText(xv.toFixed(rulerTick<1?1:0)+'cm', tpx, rulerY + 12);
       }
     }
   }
