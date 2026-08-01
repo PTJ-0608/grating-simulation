@@ -207,6 +207,19 @@ body {
       <div class="sec-title">🎨 显示选项</div>
       <div class="btn-row">
         <button class="btn btn-toggle on" id="btn-showfield">🌊 波形场</button>
+        <button class="btn btn-toggle" id="btn-dual">🌈 双波长</button>
+      </div>
+    </div>
+
+    <div id="dual-panel" style="display:none;">
+      <div class="slider-row">
+        <label>第二波长 λ₂</label>
+        <input type="range" id="s-lam2" min="380" max="780" value="590" step="1">
+        <span class="val" id="v-lam2">590 nm</span>
+      </div>
+      <div class="ditem" style="margin-top:4px;">
+        <div class="dl">瑞利判据: Δλ_min = λ/(mN)</div>
+        <div class="dv" id="dt-rayleigh">—</div>
       </div>
     </div>
 
@@ -259,7 +272,9 @@ const S = {
   thetaI: 0,  // 入射角 (度)
   speed: 10,  // 仿真速度倍率
   showField: true,
-  simTime: 0,     // 仿真内部时间
+  dualMode: false,    // 双波长模式
+  lam2: 590,          // 第二波长 (nm)
+  simTime: 0,         // 仿真内部时间
   measureX: undefined, // 虚拟标尺测量光标位置(cm)
 };
 const DEFAULTS = JSON.parse(JSON.stringify(S));
@@ -829,8 +844,36 @@ function drawChart(canvas, panel) {
     }
   }
 
+  // ── 双波长叠加 ──
+  if (S.dualMode) {
+    const lc2 = wl2rgb(S.lam2);
+    // 临时切换波长算第二组级次
+    const origLam = S.lam; S.lam = S.lam2; const phys2 = compute(true); S.lam = origLam;
+    for (let px=sml;px<=sml+ssw;px+=step) {
+      const x_cm=(px-midX)/scale;
+      const th=Math.atan(x_cm/S.L);
+      const I2=phys2.intensity(th);
+      if (I2>0.003) {
+        const a=Math.min(1,I2);
+        const rr=Math.round(8+(lc2.r-8)*a),gg=Math.round(8+(lc2.g-8)*a),bb=Math.round(18+(lc2.b-18)*a);
+        ctx.fillStyle=`rgb(${rr},${gg},${bb})`;
+        ctx.fillRect(px,stripCY-stripH/2,step+1,stripH);
+      }
+    }
+    // 标注λ₂级次位置
+    for (const o of phys2.orders) {
+      if (Math.abs(o.m)>3||o.I<0.01) continue;
+      const px=midX+o.x_cm*scale;
+      if (px>sml+5&&px<sml+ssw-5) {
+        ctx.fillStyle=lc2.rgba(0.5);
+        ctx.font='8px "Consolas"';ctx.textAlign='center';
+        ctx.fillText(`m${o.m}`, px, stripCY-stripH/2-4);
+      }
+    }
+  }
+
   ctx.fillStyle='rgba(255,255,255,0.45)';ctx.font='9px "Microsoft YaHei"';ctx.textAlign='center';
-  ctx.fillText('观察屏衍射图样 (悬停查看位置)',midX,smt+10);
+  ctx.fillText(S.dualMode?'观察屏衍射图样 (λ₁+λ₂) (悬停查看位置)':'观察屏衍射图样 (悬停查看位置)',midX,smt+10);
 
   // ── 下方: 光强分布曲线 ──
   const ml=52, mr=25, mt=topH+8, mb=28;
@@ -881,6 +924,36 @@ function drawChart(canvas, panel) {
       ctx.beginPath();ctx.arc(px,py,o.m===0?3.5:2.2,0,Math.PI*2);ctx.fill();
       if (o.m!==0){ctx.fillStyle='#9090b8';ctx.font='8px "Consolas"';ctx.textAlign='center';ctx.fillText(`m=${o.m}`,px,py-8);}
     }
+  }
+
+  // ── 双波长曲线 ──
+  if (S.dualMode) {
+    const lc2 = wl2rgb(S.lam2);
+    const origLam = S.lam; S.lam = S.lam2; const phys2 = compute(true); S.lam = origLam;
+    ctx.strokeStyle = lc2.str; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]); ctx.beginPath();
+    first=true;
+    for (let px=px0;px<=px0+pw;px+=1) {
+      const st=sMin+(px-px0)/pw*(sMax-sMin);
+      const th=Math.asin(Math.max(-0.999,Math.min(0.999,st)));
+      const I=phys2.intensity(th);
+      const py=py0+ph*(1-I);
+      if (first){ctx.moveTo(px,py);first=false;}else ctx.lineTo(px,py);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+    // 峰值标记
+    for (const o of phys2.orders) {
+      const px=toX(o.sinTheta);
+      if (px>px0+2&&px<px0+pw-2&&o.I>0.01) {
+        const I=phys2.intensity(o.thetaRad);
+        const py=py0+ph*(1-I);
+        ctx.fillStyle=lc2.str; ctx.beginPath(); ctx.arc(px,py,2,0,Math.PI*2); ctx.fill();
+      }
+    }
+    // 图例
+    ctx.fillStyle=lc.str; ctx.font='9px "Microsoft YaHei"'; ctx.textAlign='right';
+    ctx.fillText(`— λ₁=${S.lam}nm`,px0+pw-4,py0+10);
+    ctx.fillStyle=lc2.str;
+    ctx.fillText(`- - λ₂=${S.lam2}nm`,px0+pw-4,py0+22);
   }
 }
 
@@ -992,6 +1065,19 @@ function updateData() {
     rows += `<tr class="${cls}"><td>${o.m===0?'0 (中央)':o.m}</td><td>${o.thetaDeg.toFixed(1)}°</td><td>${o.x_cm.toFixed(2)}</td><td>${o.I.toFixed(4)}${o.isMissing?' ※':''}</td></tr>`;
   }
   tbody.innerHTML = rows;
+
+  // 瑞利判据
+  if (S.dualMode) {
+    const deltaLam = Math.abs(S.lam - S.lam2);
+    const lamAvg  = (S.lam + S.lam2) / 2;
+    const deltaLam_min = lamAvg / (S.N);  // m=1 时的最小可分辨 Δλ
+    const resolved  = deltaLam >= deltaLam_min;
+    const deltaLam_min_m1 = lamAvg / S.N;
+    document.getElementById('dt-rayleigh').innerHTML =
+      `Δλ=${deltaLam.toFixed(1)}nm, Δλ_min(m=1)=${deltaLam_min_m1.toFixed(1)}nm `+
+      (resolved?'✅ 已分辨':'❌ 未分辨')+
+      `<br><span style="font-size:0.6rem;color:#9090a0;">需N≥${Math.ceil(lamAvg/deltaLam)}才能分辨此双线</span>`;
+  }
 }
 
 // 预设场景
@@ -1026,6 +1112,21 @@ document.querySelectorAll('.btn-source').forEach(btn=>{
     fieldDirty=true;
     updateData();
   });
+});
+
+// 双波长切换
+document.getElementById('btn-dual').addEventListener('click',function(){
+  S.dualMode=!S.dualMode;
+  this.classList.toggle('on',S.dualMode);
+  document.getElementById('dual-panel').style.display=S.dualMode?'block':'none';
+  fieldDirty=true;
+  updateData();
+});
+// lam2 slider
+document.getElementById('s-lam2').addEventListener('input',()=>{
+  S.lam2=parseInt(document.getElementById('s-lam2').value);
+  document.getElementById('v-lam2').textContent=S.lam2+' nm';
+  fieldDirty=true;updateData();
 });
 
 // 波形场开关
