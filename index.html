@@ -90,6 +90,18 @@ body {
 .btn-reset { background:#37474f; }
 .btn-toggle { background:#3a3050; }
 .btn-toggle.on { background:#6c4fb0; box-shadow:0 0 8px rgba(108,79,176,0.5); }
+.btn-preset { font-size:0.7rem; padding:5px 7px; background:#1e3050; border-radius:4px; }
+.btn-preset:hover { background:#2a4a70; }
+.btn-source { font-size:0.68rem; padding:4px 6px; background:#1a2540; border-radius:3px; color:#c0c0e0; border:1px solid #2a2a50; cursor:pointer; }
+.btn-source:hover { background:#2a3a60; border-color:#4fc3f7; color:#fff; }
+
+/* order table */
+.order-table { width:100%; border-collapse:collapse; font-size:0.68rem; }
+.order-table th { color:var(--accent2); font-weight:700; padding:3px 4px; text-align:center; border-bottom:1px solid var(--border); font-size:0.64rem; }
+.order-table td { color:var(--text); padding:2px 4px; text-align:center; font-family:"Consolas",monospace; font-size:0.68rem; }
+.order-table tr.missing td { color:#ef5350; text-decoration:line-through; opacity:0.55; }
+.order-table tr.m0 td { color:#fff; font-weight:700; }
+.missing-badge { display:inline-block; background:#5c1a1a; color:#ef5350; padding:2px 8px; border-radius:3px; font-size:0.7rem; font-weight:700; margin:2px; }
 .color-dot {
   display:inline-block; width:12px; height:12px; border-radius:50%;
   vertical-align:middle; margin-left:4px; border:1px solid rgba(255,255,255,0.25);
@@ -170,7 +182,7 @@ body {
     <div class="divider"></div>
 
     <div>
-      <div class="sec-title">📊 计算结果</div>
+      <div class="sec-title">📊 关键指标</div>
       <div class="grid2">
         <div class="ditem"><div class="dl">一级衍射角 θ₁</div><div class="dv" id="dt-theta1">—</div></div>
         <div class="ditem"><div class="dl">条纹间距 Δx</div><div class="dv" id="dt-dx">—</div></div>
@@ -178,6 +190,19 @@ body {
         <div class="ditem"><div class="dl">中央主极大宽度</div><div class="dv" id="dt-cw">—</div></div>
         <div class="ditem"><div class="dl">角色散 (1级)</div><div class="dv" id="dt-disp">—</div></div>
         <div class="ditem"><div class="dl">色分辨本领 R</div><div class="dv" id="dt-res">—</div></div>
+      </div>
+      <div id="missing-info" style="margin-top:4px;"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div>
+      <div class="sec-title">📋 各级衍射数据</div>
+      <div style="max-height:180px;overflow-y:auto;margin-top:4px;border:1px solid var(--border);border-radius:4px;">
+        <table class="order-table" id="order-table">
+          <thead><tr><th>m</th><th>θ(°)</th><th>x(cm)</th><th>I/I₀</th></tr></thead>
+          <tbody id="order-tbody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -238,7 +263,6 @@ function wl2rgb(wl) {
 // 物理引擎
 // ============================================================
 const PHY_CACHE = {};
-let phyVersion = 0;
 function compute(force) {
   const key = `${S.lam}|${S.N}|${S.d}|${S.a}|${S.L}`;
   if (!force && PHY_CACHE.key === key) return PHY_CACHE.data;
@@ -246,12 +270,6 @@ function compute(force) {
 
   const m_max = Math.floor(d / lam);
   const orders = [];
-  for (let m = -m_max; m <= m_max; m++) {
-    const st = Math.max(-0.9999, Math.min(0.9999, m * lam / d));
-    const th = Math.asin(st);
-    const x_cm = L * Math.tan(th);
-    orders.push({m, sinTheta:st, thetaRad:th, thetaDeg:th*180/Math.PI, x_cm});
-  }
 
   function intensity(thetaRad) {
     const s = Math.sin(thetaRad);
@@ -265,13 +283,32 @@ function compute(force) {
     return single * multi / (N*N);
   }
 
+  // 计算缺级: 当 d/a = p/q 时, m = ±p, ±2p, ... 级缺失
+  const ratio = d / a;
+  const ratioRounded = Math.round(ratio);
+  const isIntegerRatio = Math.abs(ratio - ratioRounded) < 0.02;
+  const missingStep = isIntegerRatio ? ratioRounded : 0;
+
+  for (let m = -m_max; m <= m_max; m++) {
+    const st = Math.max(-0.9999, Math.min(0.9999, m * lam / d));
+    const th = Math.asin(st);
+    const x_cm = L * Math.tan(th);
+    const I = intensity(th);
+    // 判断缺级: 强度 < 0.001 且非中央零级
+    const isMissing = (m !== 0 && I < 0.002);
+    orders.push({m, sinTheta:st, thetaRad:th, thetaDeg:th*180/Math.PI, x_cm, I, isMissing});
+  }
+
+  // 汇总缺级信息
+  const missingOrders = orders.filter(o=>o.isMissing).map(o=>o.m);
+
   const centralHW = lam / (N * d);
   const centralHW_cm = L * Math.tan(centralHW);
   const o1 = orders.find(o=>o.m===1);
   let angDisp = 0;
   if (o1) angDisp = 1000 / (d * Math.cos(o1.thetaRad));
 
-  const result = { orders, m_max, intensity, centralHW_rad:centralHW, centralHW_cm, angDisp, resolvingPower:N, fringeSpacing:o1?Math.abs(o1.x_cm):0 };
+  const result = { orders, m_max, intensity, centralHW_rad:centralHW, centralHW_cm, angDisp, resolvingPower:N, fringeSpacing:o1?Math.abs(o1.x_cm):0, missingOrders, ratio, isIntegerRatio, missingStep };
   PHY_CACHE.key = key;
   PHY_CACHE.data = result;
   return result;
@@ -793,7 +830,11 @@ function bind(id, key, fmt) {
   const sl=document.getElementById('s-'+id);
   const vl=document.getElementById('v-'+id);
   sl.addEventListener('input',()=>{
-    const v=parseFloat(sl.value);
+    let v=parseFloat(sl.value);
+    // 物理约束: 缝宽 ≤ 光栅常数
+    if (key==='a' && v > S.d) { v = S.d; sl.value = v; }
+    if (key==='d' && v < S.a) { S.a = v; document.getElementById('s-a').value = v;
+      document.getElementById('v-a').textContent = fmt_a(v); }
     S[key]=v;
     vl.textContent=fmt(v);
     if (key==='lam') updateColorDot();
@@ -801,10 +842,11 @@ function bind(id, key, fmt) {
     updateData();
   });
 }
+const fmt_a = (v)=>`${(v/1000).toFixed(3)} μm`;
 bind('lam','lam',v=>`${v} nm`);
 bind('N','N',v=>`${v}`);
 bind('d','d',v=>`${(v/1000).toFixed(3)} μm`);
-bind('a','a',v=>`${(v/1000).toFixed(3)} μm`);
+bind('a','a',fmt_a);
 bind('L','L',v=>`${v} cm`);
 bind('speed','speed',v=>`${(v/10).toFixed(1)}x`);
 
@@ -826,6 +868,25 @@ function updateData() {
   document.getElementById('dt-cw').textContent=`${(phys.centralHW_cm*2).toFixed(2)} cm`;
   document.getElementById('dt-disp').textContent=`${phys.angDisp.toFixed(4)} rad/μm`;
   document.getElementById('dt-res').textContent=`${phys.resolvingPower}`;
+
+  // 缺级提示
+  const mi = document.getElementById('missing-info');
+  if (phys.missingOrders.length > 0) {
+    const dDivA = (phys.ratio).toFixed(1);
+    mi.innerHTML = `<span class="missing-badge">⚠ 缺级: m=±${phys.missingOrders.filter(m=>m>0).join(',±')}</span><br><span style="font-size:0.64rem;color:#9090a0;">原因: d/a≈${dDivA} 为整数, 对应级次落入单缝衍射暗纹</span>`;
+  } else {
+    const dDivA = (phys.ratio).toFixed(1);
+    mi.innerHTML = `<span style="font-size:0.64rem;color:#607080;">d/a≈${dDivA}, 无缺级</span>`;
+  }
+
+  // 级次数据表
+  const tbody = document.getElementById('order-tbody');
+  let rows = '';
+  for (const o of phys.orders) {
+    const cls = o.m === 0 ? 'm0' : (o.isMissing ? 'missing' : '');
+    rows += `<tr class="${cls}"><td>${o.m===0?'0 (中央)':o.m}</td><td>${o.thetaDeg.toFixed(1)}°</td><td>${o.x_cm.toFixed(2)}</td><td>${o.I.toFixed(4)}${o.isMissing?' ※':''}</td></tr>`;
+  }
+  tbody.innerHTML = rows;
 }
 
 // 波形场开关
