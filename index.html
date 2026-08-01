@@ -173,6 +173,20 @@ body {
     <div class="divider"></div>
 
     <div>
+      <div class="sec-title">💡 光源预设</div>
+      <div class="btn-row" style="flex-wrap:wrap;">
+        <button class="btn btn-source" data-wl="405">🔮 405nm 紫光</button>
+        <button class="btn btn-source" data-wl="488">🔵 488nm 蓝光</button>
+        <button class="btn btn-source" data-wl="532">🟢 532nm 绿光</button>
+        <button class="btn btn-source" data-wl="589">🟡 589nm 钠灯</button>
+        <button class="btn btn-source" data-wl="633">🔴 633nm He-Ne</button>
+        <button class="btn btn-source" data-wl="650">🔴 650nm 红光</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div>
       <div class="sec-title">🎨 显示选项</div>
       <div class="btn-row">
         <button class="btn btn-toggle on" id="btn-showfield">🌊 波形场</button>
@@ -888,6 +902,19 @@ function updateData() {
   }
   tbody.innerHTML = rows;
 }
+
+// 光源预设按钮
+document.querySelectorAll('.btn-source').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const wl=parseInt(btn.dataset.wl);
+    S.lam=wl;
+    document.getElementById('s-lam').value=wl;
+    document.getElementById('v-lam').textContent=wl+' nm';
+    updateColorDot();
+    fieldDirty=true;
+    updateData();
+  });
+});
 
 // 波形场开关
 document.getElementById('btn-showfield').addEventListener('click',function(){
