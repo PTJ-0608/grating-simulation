@@ -489,13 +489,10 @@ function drawWaveField(canvas, panel, dt) {
       const envelope = Math.sqrt(sumSin * sumSin + sumCos * sumCos);
       // 归一化
       const norm = envelope / Math.max(0.3, slitN * 0.55);
-      // 应用时间振荡: 用 cos(phi_total - ωt) 的形式
-      // totalPhase = atan2(sumSin, sumCos)
-      // oscillation = cos(totalPhase - phase) = cos(totalPhase)*cos(phase) + sin(totalPhase)*sin(phase)
-      // cos(totalPhase) = sumCos/envelope, sin(totalPhase) = sumSin/envelope
+      // 真实瞬时场: ΣA·sin(kr - ωt) = sumSin·cos(ωt) - sumCos·sin(ωt)
       let osc = 0;
       if (envelope > 0.001) {
-        osc = (sumCos / envelope) * Math.cos(phase) + (sumSin / envelope) * Math.sin(phase);
+        osc = (sumSin * Math.cos(phase) - sumCos * Math.sin(phase)) / envelope;
       }
       // 混合: 70% 包络 + 30% 振荡
       const mixed = norm * (0.7 + 0.3 * osc);
@@ -722,12 +719,12 @@ function drawOptical(canvas, panel) {
         ctx.beginPath();ctx.arc(cx,sy,rr,-Math.PI/2,Math.PI/2);ctx.stroke();
       }
     }
-    for (const mo of [0,1,-1]) {
-      const st=Math.max(-1,Math.min(1,mo*lam/d));
-      const th=Math.asin(st);
-      const dx=maxSY*0.55*Math.cos(th),dy=maxSY*0.55*Math.sin(th);
-      ctx.strokeStyle=mo===0?'rgba(255,255,255,0.35)':la(0.35);
-      ctx.lineWidth=mo===0?1.2:0.8;ctx.setLineDash([4,4]);
+    // 使用 phys.orders 的真实衍射方向 (已包含入射角)
+    for (const o of phys.orders) {
+      if (Math.abs(o.m) > 1) continue;
+      const dx=maxSY*0.55*Math.cos(o.thetaRad),dy=maxSY*0.55*Math.sin(o.thetaRad);
+      ctx.strokeStyle=o.m===0?'rgba(255,255,255,0.35)':la(0.35);
+      ctx.lineWidth=o.m===0?1.2:0.8;ctx.setLineDash([4,4]);
       for (let i=0;i<Math.min(showN,7);i++) {
         const sy=cy+(i-(showN-1)/2)*slitSp2;
         ctx.beginPath();ctx.moveTo(cx,sy);ctx.lineTo(cx+dx,sy+dy);ctx.stroke();
@@ -894,8 +891,12 @@ function drawChart(canvas, panel) {
   const ml=52, mr=25, mt=topH+8, mb=28;
   const pw=w-ml-mr, ph=h-mt-mb;
   const px0=ml, py0=mt;
-  const maxST=Math.min(0.9,(phys.m_max+1.8)*S.lam/S.d);
-  const sMin=-maxST, sMax=maxST;
+  // x轴范围根据实际级次位置计算 (包含入射角偏移)
+  const sinOrders = phys.orders.map(o=>o.sinTheta);
+  let sMinRaw=Math.min(...sinOrders), sMaxRaw=Math.max(...sinOrders);
+  const sPad=(sMaxRaw-sMinRaw)*0.12||0.1;
+  const sMin=Math.max(-0.92,sMinRaw-sPad);
+  const sMax=Math.min(0.92,sMaxRaw+sPad);
   const toX=(st)=>px0+(st-sMin)/(sMax-sMin)*pw;
 
   ctx.strokeStyle='rgba(200,200,220,0.3)';ctx.lineWidth=1;
@@ -911,7 +912,12 @@ function drawChart(canvas, panel) {
   ctx.save();ctx.translate(px0-34,py0+ph/2);ctx.rotate(-Math.PI/2);
   ctx.textAlign='center';ctx.fillText('I / I₀',0,0);ctx.restore();
   ctx.textAlign='center';
-  for (let s=-0.8;s<=0.8;s+=0.2) { ctx.fillText(s.toFixed(1),toX(s),py0+ph+14); }
+  // 自适应 x 轴刻度
+  const tickStep = (sMax-sMin) > 0.8 ? 0.2 : ((sMax-sMin) > 0.4 ? 0.1 : 0.05);
+  for (let sv = Math.ceil(sMin/tickStep)*tickStep; sv <= sMax; sv += tickStep) {
+    if (Math.abs(sv) < tickStep*0.3) sv = 0; // snap near-zero
+    ctx.fillText(sv.toFixed(tickStep<0.1?2:1), toX(sv), py0+ph+14);
+  }
   ctx.fillText('sin θ',px0+pw/2,py0+ph+26);
 
   // 曲线
@@ -1228,10 +1234,12 @@ window.addEventListener('keydown',(e)=>{
   switch(e.key) {
     case ' ': case 'Spacebar':
       e.preventDefault();
-      if (S.speed>0) { S._pausedSpeed=S.speed; S.speed=0;
-        document.getElementById('s-speed').value=0; document.getElementById('v-speed').textContent='0.0x'; }
-      else { S.speed=S._pausedSpeed||10;
-        document.getElementById('s-speed').value=S.speed; document.getElementById('v-speed').textContent=`${(S.speed/10).toFixed(1)}x`; }
+      if (S.speed > 0) { S._pausedSpeed=S.speed; S.speed=0;
+        document.getElementById('s-speed').value=0;
+        document.getElementById('v-speed').textContent='⏸'; }
+      else { S.speed=S._pausedSpeed||DEFAULTS.speed;
+        document.getElementById('s-speed').value=S.speed;
+        document.getElementById('v-speed').textContent=`${(S.speed/10).toFixed(1)}x`; }
       break;
     case 'r': case 'R':
       document.getElementById('btn-reset').click(); break;
