@@ -252,7 +252,22 @@ body {
 
     <div class="divider"></div>
 
+    <div>
+      <div class="sec-title">📝 关键公式</div>
+      <div style="font-size:0.72rem;color:#b0b0d0;line-height:1.6;background:var(--bg-input);border:1px solid var(--border);border-radius:5px;padding:8px 10px;">
+        <div>光栅方程: d(sinθ<sub>m</sub> − sinθ<sub>i</sub>) = mλ</div>
+        <div>强度分布: I = I₀·(sinβ/β)²·(sinNα/sinα)²</div>
+        <div>其中 β = (πa/λ)(sinθ−sinθ<sub>i</sub>), α = (πd/λ)(sinθ−sinθ<sub>i</sub>)</div>
+        <div>角色散: dθ/dλ = m/(d·cosθ)</div>
+        <div>分辨本领: R = λ/Δλ<sub>min</sub> = mN</div>
+        <div id="formula-values" style="color:#80cbc4;margin-top:2px;font-size:0.7rem;"></div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
     <button class="btn btn-reset" id="btn-reset">↺ 恢复默认参数</button>
+    <div style="font-size:0.6rem;color:#606080;text-align:center;margin-top:4px;">快捷键: 空格=暂停 | R=重置 | ←→=调波长 | 1-4=预设 | F=波形 | D=双波长</div>
   </aside>
 </div>
 
@@ -1070,7 +1085,7 @@ function updateData() {
   if (S.dualMode) {
     const deltaLam = Math.abs(S.lam - S.lam2);
     const lamAvg  = (S.lam + S.lam2) / 2;
-    const deltaLam_min = lamAvg / (S.N);  // m=1 时的最小可分辨 Δλ
+    const deltaLam_min = lamAvg / (S.N);
     const resolved  = deltaLam >= deltaLam_min;
     const deltaLam_min_m1 = lamAvg / S.N;
     document.getElementById('dt-rayleigh').innerHTML =
@@ -1078,6 +1093,14 @@ function updateData() {
       (resolved?'✅ 已分辨':'❌ 未分辨')+
       `<br><span style="font-size:0.6rem;color:#9090a0;">需N≥${Math.ceil(lamAvg/deltaLam)}才能分辨此双线</span>`;
   }
+
+  // 公式数值
+  const sinTheta1 = o1 ? o1.sinTheta : 0;
+  const d_micron = (S.d/1000).toFixed(2);
+  const a_micron = (S.a/1000).toFixed(2);
+  const th_i_val = S.thetaI || 0;
+  document.getElementById('formula-values').innerHTML =
+    `当前: d=${d_micron}μm, a=${a_micron}μm, λ=${S.lam}nm, θᵢ=${th_i_val}°, N=${S.N}, R=mN=${S.N} (m=1时)`;
 }
 
 // 预设场景
@@ -1198,6 +1221,41 @@ window.addEventListener('resize',()=>{
 });
 
 // ============================================================
+// ── 键盘快捷键 ──
+window.addEventListener('keydown',(e)=>{
+  // 忽略输入框中的按键
+  if (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+  switch(e.key) {
+    case ' ': case 'Spacebar':
+      e.preventDefault();
+      if (S.speed>0) { S._pausedSpeed=S.speed; S.speed=0;
+        document.getElementById('s-speed').value=0; document.getElementById('v-speed').textContent='0.0x'; }
+      else { S.speed=S._pausedSpeed||10;
+        document.getElementById('s-speed').value=S.speed; document.getElementById('v-speed').textContent=`${(S.speed/10).toFixed(1)}x`; }
+      break;
+    case 'r': case 'R':
+      document.getElementById('btn-reset').click(); break;
+    case 'ArrowLeft':
+      S.lam=Math.max(380,S.lam-5);
+      document.getElementById('s-lam').value=S.lam;
+      document.getElementById('v-lam').textContent=S.lam+' nm';
+      updateColorDot(); fieldDirty=true; updateData(); break;
+    case 'ArrowRight':
+      S.lam=Math.min(780,S.lam+5);
+      document.getElementById('s-lam').value=S.lam;
+      document.getElementById('v-lam').textContent=S.lam+' nm';
+      updateColorDot(); fieldDirty=true; updateData(); break;
+    case '1': applyScene('young'); break;
+    case '2': applyScene('multi'); break;
+    case '3': applyScene('grating'); break;
+    case '4': applyScene('missing'); break;
+    case 'f': case 'F':
+      document.getElementById('btn-showfield').click(); break;
+    case 'd': case 'D':
+      document.getElementById('btn-dual').click(); break;
+  }
+});
+
 // 启动
 // ============================================================
 updateColorDot();
