@@ -394,7 +394,7 @@ function drawWaveField(canvas, panel, dt) {
         bb = Math.round(bgB * dim);
       }
 
-      const idx = (gy * gridW + gx) * 4;
+      const idx = (gy * GRID_W + gx) * 4;
       imgData.data[idx]     = rr;
       imgData.data[idx + 1] = gg;
       imgData.data[idx + 2] = bb;
@@ -404,8 +404,8 @@ function drawWaveField(canvas, panel, dt) {
 
   // 渲染: 离屏 → 主画布 (平滑放大)
   const offCanvas = document.createElement('canvas');
-  offCanvas.width  = gridW;
-  offCanvas.height = gridH;
+  offCanvas.width  = GRID_W;
+  offCanvas.height = GRID_H;
   offCanvas.getContext('2d').putImageData(imgData, 0, 0);
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(offCanvas, pad, pad, fieldW, fieldH);
