@@ -164,6 +164,11 @@ body {
         <span class="val" id="v-L">100 cm</span>
       </div>
       <div class="slider-row">
+        <label>入射角 θᵢ</label>
+        <input type="range" id="s-thetaI" min="-75" max="75" value="0" step="1">
+        <span class="val" id="v-thetaI">0°</span>
+      </div>
+      <div class="slider-row">
         <label>仿真速度</label>
         <input type="range" id="s-speed" min="2" max="30" value="10" step="1">
         <span class="val" id="v-speed">1.0x</span>
@@ -251,6 +256,7 @@ const S = {
   d: 2500,    // nm
   a: 500,     // nm
   L: 100,     // cm
+  thetaI: 0,  // 入射角 (度)
   speed: 10,  // 仿真速度倍率
   showField: true,
   simTime: 0,     // 仿真内部时间
@@ -291,17 +297,17 @@ function wl2rgb(wl) {
 // ============================================================
 const PHY_CACHE = {};
 function compute(force) {
-  const key = `${S.lam}|${S.N}|${S.d}|${S.a}|${S.L}`;
+  const key = `${S.lam}|${S.N}|${S.d}|${S.a}|${S.L}|${S.thetaI}`;
   if (!force && PHY_CACHE.key === key) return PHY_CACHE.data;
-  const {lam,N,d,a,L} = S;
-
-  const m_max = Math.floor(d / lam);
-  const orders = [];
+  const {lam,N,d,a,L,thetaI} = S;
+  const th_i = thetaI * Math.PI / 180;  // 入射角 (弧度)
+  const sin_i = Math.sin(th_i);
 
   function intensity(thetaRad) {
+    // 相对光栅平面的角度 (用于单缝衍射因子)
     const s = Math.sin(thetaRad);
-    const beta  = (Math.PI * a / lam) * s;
-    const alpha = (Math.PI * d / lam) * s;
+    const beta  = (Math.PI * a / lam) * (s - sin_i);
+    const alpha = (Math.PI * d / lam) * (s - sin_i);
     let single = 1;
     if (Math.abs(beta) > 1e-12) { const sb = Math.sin(beta)/beta; single = sb*sb; }
     let multi = N*N;
@@ -310,21 +316,27 @@ function compute(force) {
     return single * multi / (N*N);
   }
 
-  // 计算缺级: 当 d/a = p/q 时, m = ±p, ±2p, ... 级缺失
+  // 可见级次: d(sinθ - sinθᵢ) = mλ  →  sinθ = sinθᵢ + mλ/d
+  const m_max_pos = Math.floor((1 - sin_i) * d / lam);
+  const m_max_neg = Math.floor((1 + sin_i) * d / lam);
+  const m_min = -m_max_neg, m_max_order = m_max_pos;
+  const orders = [];
+
+  // 计算缺级
   const ratio = d / a;
   const ratioRounded = Math.round(ratio);
   const isIntegerRatio = Math.abs(ratio - ratioRounded) < 0.02;
   const missingStep = isIntegerRatio ? ratioRounded : 0;
 
-  for (let m = -m_max; m <= m_max; m++) {
-    const st = Math.max(-0.9999, Math.min(0.9999, m * lam / d));
+  for (let m = m_min; m <= m_max_order; m++) {
+    const st = Math.max(-0.9999, Math.min(0.9999, sin_i + m * lam / d));
     const th = Math.asin(st);
     const x_cm = L * Math.tan(th);
     const I = intensity(th);
-    // 判断缺级: 强度 < 0.001 且非中央零级
     const isMissing = (m !== 0 && I < 0.002);
     orders.push({m, sinTheta:st, thetaRad:th, thetaDeg:th*180/Math.PI, x_cm, I, isMissing});
   }
+  const m_max = Math.max(m_max_pos, m_max_neg);
 
   // 汇总缺级信息
   const missingOrders = orders.filter(o=>o.isMissing).map(o=>o.m);
@@ -335,7 +347,7 @@ function compute(force) {
   let angDisp = 0;
   if (o1) angDisp = 1000 / (d * Math.cos(o1.thetaRad));
 
-  const result = { orders, m_max, intensity, centralHW_rad:centralHW, centralHW_cm, angDisp, resolvingPower:N, fringeSpacing:o1?Math.abs(o1.x_cm):0, missingOrders, ratio, isIntegerRatio, missingStep };
+  const result = { orders, m_max, intensity, centralHW_rad:centralHW, centralHW_cm, angDisp, resolvingPower:N, fringeSpacing:o1?Math.abs(o1.x_cm):0, missingOrders, ratio, isIntegerRatio, missingStep, th_i, sin_i };
   PHY_CACHE.key = key;
   PHY_CACHE.data = result;
   return result;
@@ -383,8 +395,9 @@ function drawWaveField(canvas, panel, dt) {
   const {ctx, w, h} = r;
   ctx.clearRect(0,0,w,h);
 
-  const {lam, N, d} = S;
+  const {lam, N, d, thetaI} = S;
   const lc = wl2rgb(lam);
+  const th_i = thetaI * Math.PI / 180;
 
   // ── 缩放 ──
   const pad = 16;
@@ -435,7 +448,9 @@ function drawWaveField(canvas, panel, dt) {
         const dy = wy - srcY[si];
         const dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
         const decay = 1.0 / Math.sqrt(1.0 + dist * 0.06);
-        const phi = k * dist;
+        // 入射角相位偏移: k * y_slit * sin(θᵢ)
+        const y_slit = srcY[si] - cy;
+        const phi = k * (dist - y_slit * Math.sin(th_i));
         sumSin += Math.sin(phi) * decay;
         sumCos += Math.cos(phi) * decay;
       }
@@ -620,22 +635,34 @@ function drawOptical(canvas, panel) {
   for (let gx=pad.l;gx<w-pad.r;gx+=26) { ctx.beginPath();ctx.moveTo(gx,pad.t);ctx.lineTo(gx,h-pad.b);ctx.stroke(); }
   for (let gy=pad.t;gy<h-pad.b;gy+=26) { ctx.beginPath();ctx.moveTo(pad.l,gy);ctx.lineTo(w-pad.r,gy);ctx.stroke(); }
 
-  // 光轴
+  // 光轴 (水平虚线)
   ctx.strokeStyle='rgba(255,255,255,0.06)';ctx.lineWidth=0.6;ctx.setLineDash([6,10]);
   ctx.beginPath();ctx.moveTo(srcX-10,cy);ctx.lineTo(w-pad.r+8,cy);ctx.stroke();ctx.setLineDash([]);
 
+  // 入射方向线 (倾斜)
+  const th_i_deg = S.thetaI || 0;
+  const th_i = th_i_deg * Math.PI / 180;
+  const beamDirX = Math.cos(th_i);
+  const beamDirY = Math.sin(th_i);
+
   // 光源
-  let grad=ctx.createRadialGradient(srcX,cy,2,srcX,cy,24);
+  const srcBrightX = cx - beamDirX * (cx - srcX);
+  const srcBrightY = cy - beamDirY * (cx - srcX);
+  let grad=ctx.createRadialGradient(srcBrightX,srcBrightY,2,srcBrightX,srcBrightY,24);
   grad.addColorStop(0,'rgba(255,255,255,0.9)');grad.addColorStop(0.12,la(0.85));
   grad.addColorStop(0.45,la(0.2));grad.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=grad;ctx.beginPath();ctx.arc(srcX,cy,24,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(srcX,cy,4,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=grad;ctx.beginPath();ctx.arc(srcBrightX,srcBrightY,24,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(srcBrightX,srcBrightY,4,0,Math.PI*2);ctx.fill();
 
-  // 入射光束
+  // 入射光束 (倾斜)
   for (let i=0;i<5;i++) {
-    const by=cy+(i-2)*(ph*0.22/4);
+    const offset=(i-2)*4;  // 光束宽度
+    const sx2=srcBrightX+beamDirX*30+(-beamDirY)*offset;
+    const sy2=srcBrightY+beamDirY*30+beamDirX*offset;
+    const ex2=cx-beamDirX*4+(-beamDirY)*offset;
+    const ey2=cy-beamDirY*4+beamDirX*offset;
     ctx.strokeStyle=la(0.25);ctx.lineWidth=0.7;ctx.setLineDash([2,4]);
-    ctx.beginPath();ctx.moveTo(srcX+16,by);ctx.lineTo(cx-5,by);ctx.stroke();ctx.setLineDash([]);
+    ctx.beginPath();ctx.moveTo(sx2,sy2);ctx.lineTo(ex2,ey2);ctx.stroke();ctx.setLineDash([]);
   }
 
   // 光栅
@@ -925,6 +952,7 @@ bind('N','N',v=>`${v}`);
 bind('d','d',v=>`${(v/1000).toFixed(3)} μm`);
 bind('a','a',fmt_a);
 bind('L','L',v=>`${v} cm`);
+bind('thetaI','thetaI',v=>`${v}°`);
 bind('speed','speed',v=>`${(v/10).toFixed(1)}x`);
 
 function updateColorDot() {
@@ -975,9 +1003,9 @@ const SCENES={
 };
 function applyScene(name) {
   const sc=SCENES[name];if(!sc)return;
-  Object.assign(S,{lam:sc.lam,N:sc.N,d:sc.d,a:sc.a,L:sc.L});
-  const fm={lam:v=>`${v} nm`,N:v=>`${v}`,d:v=>`${(v/1000).toFixed(3)} μm`,a:v=>`${(v/1000).toFixed(3)} μm`,L:v=>`${v} cm`};
-  for(const k of ['lam','N','d','a','L']) {
+  Object.assign(S,{lam:sc.lam,N:sc.N,d:sc.d,a:sc.a,L:sc.L,thetaI:0});
+  const fm={lam:v=>`${v} nm`,N:v=>`${v}`,d:v=>`${(v/1000).toFixed(3)} μm`,a:v=>`${(v/1000).toFixed(3)} μm`,L:v=>`${v} cm`,thetaI:v=>`${v}°`};
+  for(const k of ['lam','N','d','a','L','thetaI']) {
     document.getElementById('s-'+k).value=S[k];
     document.getElementById('v-'+k).textContent=fm[k](S[k]);
   }
@@ -1010,11 +1038,11 @@ document.getElementById('btn-showfield').addEventListener('click',function(){
 // 重置
 document.getElementById('btn-reset').addEventListener('click',()=>{
   Object.assign(S, JSON.parse(JSON.stringify(DEFAULTS)));
-  ['lam','N','d','a','L','speed'].forEach(k=>{
+  ['lam','N','d','a','L','thetaI','speed'].forEach(k=>{
     document.getElementById('s-'+k).value=S[k];
   });
-  const fmtMap={lam:v=>`${v} nm`,N:v=>`${v}`,d:v=>`${(v/1000).toFixed(3)} μm`,a:v=>`${(v/1000).toFixed(3)} μm`,L:v=>`${v} cm`,speed:v=>`${(v/10).toFixed(1)}x`};
-  ['lam','N','d','a','L','speed'].forEach(k=>{
+  const fmtMap={lam:v=>`${v} nm`,N:v=>`${v}`,d:v=>`${(v/1000).toFixed(3)} μm`,a:v=>`${(v/1000).toFixed(3)} μm`,L:v=>`${v} cm`,thetaI:v=>`${v}°`,speed:v=>`${(v/10).toFixed(1)}x`};
+  ['lam','N','d','a','L','thetaI','speed'].forEach(k=>{
     document.getElementById('v-'+k).textContent=fmtMap[k](S[k]);
   });
   S.showField=true;
