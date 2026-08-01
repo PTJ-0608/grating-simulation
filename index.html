@@ -173,6 +173,18 @@ body {
     <div class="divider"></div>
 
     <div>
+      <div class="sec-title">📐 预设场景</div>
+      <div class="btn-row" style="flex-wrap:wrap;">
+        <button class="btn btn-preset" data-scene="young">双缝干涉</button>
+        <button class="btn btn-preset" data-scene="multi">多缝(5缝)</button>
+        <button class="btn btn-preset" data-scene="grating">衍射光栅</button>
+        <button class="btn btn-preset" data-scene="missing">缺级演示</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div>
       <div class="sec-title">💡 光源预设</div>
       <div class="btn-row" style="flex-wrap:wrap;">
         <button class="btn btn-source" data-wl="405">🔮 405nm 紫光</button>
@@ -241,7 +253,8 @@ const S = {
   L: 100,     // cm
   speed: 10,  // 仿真速度倍率
   showField: true,
-  simTime: 0, // 仿真内部时间
+  simTime: 0,     // 仿真内部时间
+  measureX: undefined, // 虚拟标尺测量光标位置(cm)
 };
 const DEFAULTS = JSON.parse(JSON.stringify(S));
 
@@ -557,6 +570,20 @@ function drawWaveField(canvas, panel, dt) {
   ctx.strokeStyle = 'rgba(255,255,255,0.12)';
   ctx.lineWidth = 1;
   ctx.strokeRect(pad, pad, fieldW, fieldH);
+  // ── 色阶图例 (右侧) ──
+  const cbarX = pad + fieldW + 14, cbarY = pad + 20, cbarW = 10, cbarH = Math.min(160, fieldH * 0.5);
+  const cbarGrad = ctx.createLinearGradient(0, cbarY, 0, cbarY + cbarH);
+  cbarGrad.addColorStop(0, lc.str);
+  cbarGrad.addColorStop(0.5, `rgb(${bgR},${bgG},${bgB})`);
+  cbarGrad.addColorStop(1, '#020208');
+  ctx.fillStyle = cbarGrad;
+  ctx.fillRect(cbarX, cbarY, cbarW, cbarH);
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 0.5;
+  ctx.strokeRect(cbarX, cbarY, cbarW, cbarH);
+  ctx.fillStyle = '#8080a0'; ctx.font = '8px "Microsoft YaHei"'; ctx.textAlign = 'left';
+  ctx.fillText('亮', cbarX + cbarW + 4, cbarY + 8);
+  ctx.fillText('暗', cbarX + cbarW + 4, cbarY + cbarH - 2);
+
   ctx.fillStyle = '#607080';
   ctx.font = '8px "Microsoft YaHei"';
   ctx.textAlign = 'right';
@@ -739,8 +766,44 @@ function drawChart(canvas, panel) {
       ctx.fillText(`m=${o.m}`,px,stripCY+stripH/2+17);
     }
   }
+  // ── 虚拟标尺刻度 ──
+  const rulerY = stripCY + stripH/2 + 26;
+  const tickStep = maxAbsX < 3 ? 0.5 : (maxAbsX < 10 ? 1 : (maxAbsX < 30 ? 2 : 5));
+  for (let xv = -maxAbsX; xv <= maxAbsX; xv += tickStep) {
+    if (Math.abs(xv) < 0.001) continue;
+    const tpx = midX + xv * scale;
+    if (tpx > sml + 2 && tpx < sml + ssw - 2) {
+      const tickH = (Math.abs(Math.round(xv*2) - xv*2) < 0.01 && Math.abs(xv % 1) < 0.01) ? 7 : 4;
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(tpx, rulerY - tickH); ctx.lineTo(tpx, rulerY + tickH); ctx.stroke();
+      if (Math.abs(xv % Math.max(1, tickStep*2)) < 0.01 || Math.abs(tickStep - 1) < 0.01) {
+        ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.font = '7px "Consolas"'; ctx.textAlign = 'center';
+        ctx.fillText(xv.toFixed(tickStep<1?1:0)+'cm', tpx, rulerY + 12);
+      }
+    }
+  }
+  // 中心标记
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 0.6;
+  ctx.beginPath(); ctx.moveTo(midX, rulerY - 8); ctx.lineTo(midX, rulerY + 8); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = '7px "Consolas"'; ctx.textAlign = 'center';
+  ctx.fillText('0', midX, rulerY + 12);
+
+  // 测量光标 (跟随鼠标)
+  if (S.measureX !== undefined) {
+    const mpx = midX + S.measureX * scale;
+    if (mpx > sml && mpx < sml + ssw) {
+      ctx.strokeStyle = 'rgba(255,255,100,0.6)'; ctx.lineWidth = 1.2;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath(); ctx.moveTo(mpx, stripCY - stripH/2 - 4); ctx.lineTo(mpx, rulerY + 6); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffff88'; ctx.font = 'bold 11px "Consolas"'; ctx.textAlign = 'center';
+      const label = S.measureX > 0 ? `+${S.measureX.toFixed(2)} cm` : `${S.measureX.toFixed(2)} cm`;
+      ctx.fillText(label, mpx, stripCY - stripH/2 - 8);
+    }
+  }
+
   ctx.fillStyle='rgba(255,255,255,0.45)';ctx.font='9px "Microsoft YaHei"';ctx.textAlign='center';
-  ctx.fillText('观察屏衍射图样',midX,smt+10);
+  ctx.fillText('观察屏衍射图样 (悬停查看位置)',midX,smt+10);
 
   // ── 下方: 光强分布曲线 ──
   const ml=52, mr=25, mt=topH+8, mb=28;
@@ -903,6 +966,27 @@ function updateData() {
   tbody.innerHTML = rows;
 }
 
+// 预设场景
+const SCENES={
+  young: {lam:550,N:2,d:2000,a:400,L:100,desc:'杨氏双缝干涉: 2个狭缝, 等间距明暗条纹'},
+  multi: {lam:550,N:5,d:2500,a:500,L:100,desc:'多缝干涉: 主极大更锐利, 次极大在中间'},
+  grating:{lam:550,N:50,d:2000,a:500,L:100,desc:'衍射光栅: 极锐主极大, 适合光谱分析'},
+  missing:{lam:550,N:10,d:2000,a:1000,L:100,desc:'缺级演示: d/a=2, m=±2,±4…缺失'},
+};
+function applyScene(name) {
+  const sc=SCENES[name];if(!sc)return;
+  Object.assign(S,{lam:sc.lam,N:sc.N,d:sc.d,a:sc.a,L:sc.L});
+  const fm={lam:v=>`${v} nm`,N:v=>`${v}`,d:v=>`${(v/1000).toFixed(3)} μm`,a:v=>`${(v/1000).toFixed(3)} μm`,L:v=>`${v} cm`};
+  for(const k of ['lam','N','d','a','L']) {
+    document.getElementById('s-'+k).value=S[k];
+    document.getElementById('v-'+k).textContent=fm[k](S[k]);
+  }
+  updateColorDot(); fieldDirty=true; updateData();
+}
+document.querySelectorAll('.btn-preset').forEach(btn=>{
+  btn.addEventListener('click',()=>applyScene(btn.dataset.scene));
+});
+
 // 光源预设按钮
 document.querySelectorAll('.btn-source').forEach(btn=>{
   btn.addEventListener('click',()=>{
@@ -938,6 +1022,44 @@ document.getElementById('btn-reset').addEventListener('click',()=>{
   updateColorDot();
   fieldDirty=true;
 });
+
+// 虚拟标尺: 鼠标悬停在强度图面板上时显示测量光标
+let measureThrottle=0;
+pChart.addEventListener('mousemove',(e)=>{
+  const rect=pChart.getBoundingClientRect();
+  const mx=e.clientX-rect.left;
+  // 计算对应x_cm: 需要知道面板内chart canvas的布局参数
+  // drawChart中有sml,smr,midX,ssw,maxAbsX等，这里简化计算
+  const w=rect.width, h=rect.height;
+  const sml=42, smr=30, ssw=w-sml-smr, midX=sml+ssw/2;
+  const phys=compute();
+  const maxAbsX=1.12*Math.max(...phys.orders.map(o=>Math.abs(o.x_cm)),6);
+  const scale=ssw/(2*maxAbsX);
+  S.measureX=(mx-midX)/scale;
+  // 限制范围
+  if (Math.abs(S.measureX)>maxAbsX*1.1) S.measureX=undefined;
+  // 节流重绘
+  const now=performance.now();
+  if (now-measureThrottle>50) { measureThrottle=now; fieldDirty=true; scheduleFrame(); }
+});
+pChart.addEventListener('mouseleave',()=>{
+  if (S.measureX!==undefined) { S.measureX=undefined; fieldDirty=true; scheduleFrame(); }
+});
+// 触摸支持
+pChart.addEventListener('touchmove',(e)=>{
+  const rect=pChart.getBoundingClientRect();
+  const mx=e.touches[0].clientX-rect.left;
+  const w=rect.width;
+  const sml=42, smr=30, ssw=w-sml-smr, midX=sml+ssw/2;
+  const phys=compute();
+  const maxAbsX=1.12*Math.max(...phys.orders.map(o=>Math.abs(o.x_cm)),6);
+  const scale=ssw/(2*maxAbsX);
+  S.measureX=(mx-midX)/scale;
+  if (Math.abs(S.measureX)>maxAbsX*1.1) S.measureX=undefined;
+  e.preventDefault();
+  fieldDirty=true; scheduleFrame();
+},{passive:false});
+pChart.addEventListener('touchend',()=>{ S.measureX=undefined; fieldDirty=true; scheduleFrame(); });
 
 // resize
 let resizeT;
